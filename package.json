@@ -1,0 +1,9 @@
+{
+  "name": "ai-document-chatbot-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI document Q&A chatbot demo — asks Gemini questions grounded in a provided document.",
+  "engines": {
+    "node": ">=18"
+  }
+}

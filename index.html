@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Document Q&A Chatbot — Demo by Mohammad Saad</title>
+<meta name="description" content="Ask questions about a document and get answers grounded only in its content — a live AI chatbot demo built with the Gemini API.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="top">
+  <a href="../" class="back-link">← Back to portfolio</a>
+  <div class="brand">saad.dev <span class="brand-dot"></span> doc-chat</div>
+</header>
+
+<main class="wrap">
+  <div class="intro">
+    <div class="eyebrow">Live demo</div>
+    <h1>AI Document Q&amp;A Chatbot</h1>
+    <p class="intro-sub">Ask questions and get answers grounded only in the document below — no guessing, no made-up answers. Try the sample doc, or paste in your own.</p>
+  </div>
+
+  <div class="panels">
+    <section class="doc-panel">
+      <div class="panel-head">
+        <span class="panel-title">Document</span>
+        <div class="doc-toggle">
+          <button class="toggle-btn active" data-mode="sample">Sample</button>
+          <button class="toggle-btn" data-mode="custom">Your own</button>
+        </div>
+      </div>
+
+      <div class="doc-body" id="sampleView">
+        <h3 id="docTitle">Aurora Smart Thermostat — User Manual</h3>
+        <div class="doc-text" id="docText"></div>
+      </div>
+
+      <div class="doc-body hidden" id="customView">
+        <label class="field-label" for="customText">Paste text, or upload a .txt file</label>
+        <textarea id="customText" placeholder="Paste any document text here — a policy, FAQ, manual, or notes..."></textarea>
+        <div class="upload-row">
+          <input type="file" id="fileInput" accept=".txt" hidden>
+          <button class="btn btn-ghost" id="uploadBtn">Upload .txt file</button>
+          <button class="btn btn-primary" id="useCustomBtn">Use this document</button>
+        </div>
+        <p class="hint" id="customHint"></p>
+      </div>
+    </section>
+
+    <section class="chat-panel">
+      <div class="panel-head">
+        <span class="panel-title">Chat</span>
+        <button class="btn btn-ghost btn-small" id="resetBtn">Reset chat</button>
+      </div>
+      <div class="chat-window" id="chatWindow"></div>
+      <form class="chat-input-row" id="chatForm">
+        <input type="text" id="chatInput" placeholder="Ask something about the document..." autocomplete="off">
+        <button type="submit" class="btn btn-primary">Send</button>
+      </form>
+    </section>
+  </div>
+
+  <p class="footnote">Built by <a href="https://github.com/shsaadu" target="_blank" rel="noopener">Mohammad Saad</a> — full-stack developer &amp; AI/ML engineer. Powered by the Gemini API.</p>
+</main>
+
+<script src="js/main.js" defer></script>
+</body>
+</html>
