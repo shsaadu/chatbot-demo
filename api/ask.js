@@ -1,84 +1,157 @@
-// Vercel Serverless Function — runs on the server, never in the browser.
+// Vercel Edge Function — runs on the server, never in the browser.
 // This is what keeps your Gemini API key private: the browser calls THIS
-// endpoint, and only this endpoint (running on Vercel's servers) calls Google.
+// endpoint, and only this endpoint calls Google.
+//
+// Unlike a "stuff the whole document in the prompt" demo, this endpoint
+// receives only the small set of document chunks that retrieval (see
+// api/embed.js + js/main.js) already decided are relevant to the question.
+// It streams the answer back token-by-token instead of waiting for the
+// full response.
 
-module.exports = async function handler(req, res) {
+export const config = { runtime: 'edge' };
+
+const MODEL = 'gemini-3.5-flash';
+
+function sse(obj) {
+  return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
+export default async function handler(req) {
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
   }
 
-  const { document, question, history } = req.body || {};
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400 });
+  }
 
-  if (!document || !question) {
-    res.status(400).json({ error: 'Missing document or question' });
-    return;
+  const { chunks, question, history } = body || {};
+
+  if (!Array.isArray(chunks) || chunks.length === 0 || !question) {
+    return new Response(JSON.stringify({ error: 'Missing chunks or question' }), { status: 400 });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({
-      error: 'Server is missing GEMINI_API_KEY. Add it in Vercel → Project → Settings → Environment Variables.'
-    });
-    return;
+    return new Response(
+      JSON.stringify({
+        error: 'Server is missing GEMINI_API_KEY. Add it in Vercel → Project → Settings → Environment Variables.'
+      }),
+      { status: 500 }
+    );
   }
 
-  // Keep the document within a safe prompt size for a demo project.
-  const truncatedDoc = String(document).slice(0, 12000);
+  // Only the retrieved excerpts go in the prompt — not the whole document.
+  const context = chunks
+    .map((c, i) => `[Excerpt ${i + 1}]\n${String(c).slice(0, 2000)}`)
+    .join('\n\n');
 
   const systemInstruction =
-    "You are a helpful assistant that answers questions using ONLY the information " +
-    "in the document provided below. If the answer isn't in the document, say clearly " +
-    "that the document doesn't cover it, rather than guessing. Keep answers concise.\n\n" +
-    "DOCUMENT:\n" + truncatedDoc;
+    'You are a helpful assistant that answers questions using ONLY the excerpts below, ' +
+    'which were retrieved from a larger document because they are the most relevant to the question. ' +
+    "If the excerpts don't contain the answer, say clearly that the document doesn't cover it, rather " +
+    'than guessing or using outside knowledge. Keep answers concise.\n\n' +
+    context;
 
-  // Include a little chat history for context, most recent turns only.
   const contents = [];
   if (Array.isArray(history)) {
     history.slice(-6).forEach((turn) => {
-      contents.push({
-        role: turn.role === 'user' ? 'user' : 'model',
-        parts: [{ text: turn.text }]
-      });
+      if (turn && turn.text) {
+        contents.push({
+          role: turn.role === 'user' ? 'user' : 'model',
+          parts: [{ text: turn.text }]
+        });
+      }
     });
   }
   contents.push({ role: 'user', parts: [{ text: question }] });
 
+  let upstream;
   try {
-    const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
+    upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:streamGenerateContent?alt=sse`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey
-        },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemInstruction }] },
           contents
         })
       }
     );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      res.status(response.status).json({
-        error: (data && data.error && data.error.message) || 'Gemini API error'
-      });
-      return;
-    }
-
-    const answer =
-      (data.candidates &&
-        data.candidates[0] &&
-        data.candidates[0].content &&
-        data.candidates[0].content.parts &&
-        data.candidates[0].content.parts.map((p) => p.text).join('')) ||
-      "Sorry, I couldn't generate a response for that.";
-
-    res.status(200).json({ answer });
   } catch (err) {
-    res.status(500).json({ error: 'Request to Gemini failed', details: String(err) });
+    return new Response(JSON.stringify({ error: 'Request to Gemini failed', details: String(err) }), {
+      status: 500
+    });
   }
-};
+
+  if (!upstream.ok || !upstream.body) {
+    let message = 'Gemini API error';
+    try {
+      const errData = await upstream.json();
+      message = (errData && errData.error && errData.error.message) || message;
+    } catch {
+      // ignore parse failure, use default message
+    }
+    return new Response(JSON.stringify({ error: message }), { status: upstream.status || 500 });
+  }
+
+  // Re-package Gemini's SSE stream into a simpler `{ text }` / `{ error }` stream
+  // so the frontend doesn't need to know Gemini's response shape.
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let buffer = '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const jsonStr = trimmed.slice(5).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const text =
+                (parsed.candidates &&
+                  parsed.candidates[0] &&
+                  parsed.candidates[0].content &&
+                  parsed.candidates[0].content.parts &&
+                  parsed.candidates[0].content.parts.map((p) => p.text || '').join('')) ||
+                '';
+              if (text) controller.enqueue(encoder.encode(sse({ text })));
+            } catch {
+              // skip malformed SSE line
+            }
+          }
+        }
+      } catch (err) {
+        controller.enqueue(encoder.encode(sse({ error: 'Stream interrupted: ' + String(err) })));
+      } finally {
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive'
+    }
+  });
+}

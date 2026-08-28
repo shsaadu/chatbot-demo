@@ -10,6 +10,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js" defer></script>
 </head>
 <body>
 
@@ -22,7 +25,7 @@
   <div class="intro">
     <div class="eyebrow">Live demo</div>
     <h1>AI Document Q&amp;A Chatbot</h1>
-    <p class="intro-sub">Ask questions and get answers grounded only in the document below — no guessing, no made-up answers. Try the sample doc, or paste in your own.</p>
+    <p class="intro-sub">Ask questions and get answers grounded only in the document below — no guessing, no made-up answers. Under the hood this is real retrieval-augmented generation: your document is chunked and embedded, and only the most relevant chunks are sent to the model for each question.</p>
   </div>
 
   <div class="panels">
@@ -34,6 +37,7 @@
           <button class="toggle-btn" data-mode="custom">Your own</button>
         </div>
       </div>
+      <div class="index-status" id="indexStatus"></div>
 
       <div class="doc-body" id="sampleView">
         <h3 id="docTitle">Aurora Smart Thermostat — User Manual</h3>
@@ -41,11 +45,11 @@
       </div>
 
       <div class="doc-body hidden" id="customView">
-        <label class="field-label" for="customText">Paste text, or upload a .txt file</label>
+        <label class="field-label" for="customText">Paste text, or upload a .txt or .pdf file</label>
         <textarea id="customText" placeholder="Paste any document text here — a policy, FAQ, manual, or notes..."></textarea>
         <div class="upload-row">
-          <input type="file" id="fileInput" accept=".txt" hidden>
-          <button class="btn btn-ghost" id="uploadBtn">Upload .txt file</button>
+          <input type="file" id="fileInput" accept=".txt,.pdf" hidden>
+          <button class="btn btn-ghost" id="uploadBtn">Upload .txt or .pdf</button>
           <button class="btn btn-primary" id="useCustomBtn">Use this document</button>
         </div>
         <p class="hint" id="customHint"></p>
@@ -65,7 +69,7 @@
     </section>
   </div>
 
-  <p class="footnote">Built by <a href="https://github.com/shsaadu" target="_blank" rel="noopener">Mohammad Saad</a> — full-stack developer &amp; AI/ML engineer. Powered by the Gemini API.</p>
+  <p class="footnote">Built by <a href="https://github.com/shsaadu" target="_blank" rel="noopener">Mohammad Saad</a> — full-stack developer &amp; AI/ML engineer. RAG pipeline (chunking, embeddings, retrieval) + streaming responses, powered by the Gemini API.</p>
 </main>
 
 <script src="js/main.js" defer></script>

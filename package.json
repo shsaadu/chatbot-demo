@@ -1,8 +1,8 @@
 {
   "name": "ai-document-chatbot-demo",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "AI document Q&A chatbot demo — asks Gemini questions grounded in a provided document.",
+  "description": "AI document Q&A chatbot demo — real RAG (chunking + embeddings + retrieval), streaming answers, and PDF support, powered by the Gemini API.",
   "engines": {
     "node": ">=18"
   }
