@@ -1,4 +1,5 @@
 // ---- Sample document (so the demo works instantly, no upload needed) ----
+const SAMPLE_NAME = 'Aurora Smart Thermostat — User Manual';
 const SAMPLE_DOC = `Aurora Smart Thermostat — User Manual
 
 1. Getting Started
@@ -24,24 +25,19 @@ if (window.pdfjsLib) {
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 
-const docTextEl = document.getElementById('docText');
-docTextEl.textContent = SAMPLE_DOC;
+document.getElementById('docText').textContent = SAMPLE_DOC;
 
-// ---- RAG state: the document, its chunks, and their embeddings ----
+// ---- Global state: documents (each with its own chunks/embeddings) + tunable settings ----
 const state = {
-  activeDocument: SAMPLE_DOC,
-  chunks: [],
-  embeddings: null,
-  indexed: false,
-  indexing: false,
-  indexingPromise: null
+  documents: [], // { id, name, text, chunks, embeddings, indexed, indexing, indexingPromise }
+  settings: { chunkWords: 140, overlapWords: 30, topK: 4, temperature: 0.3 }
 };
 
 const EMBED_BATCH_SIZE = 16;
-const TOP_K = 4;
+let docIdCounter = 0;
 
 // ---- Chunking: split into overlapping word windows ----
-function chunkText(text, chunkWords = 140, overlapWords = 30) {
+function chunkText(text, chunkWords, overlapWords) {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
   const chunks = [];
@@ -65,6 +61,12 @@ function cosineSim(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
 }
 
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 // ---- Talking to /api/embed (batched) ----
 async function embedTexts(texts, taskType, onProgress) {
   const batches = [];
@@ -86,67 +88,155 @@ async function embedTexts(texts, taskType, onProgress) {
   return all;
 }
 
-// ---- Indexing: chunk the active document and embed every chunk ----
+// ---- Document management ----
+const docListEl = document.getElementById('docList');
+const docCountBadge = document.getElementById('docCountBadge');
+
+function renderDocList() {
+  docListEl.innerHTML = '';
+  state.documents.forEach((doc) => {
+    const chip = document.createElement('div');
+    chip.className = 'doc-chip';
+    const status = doc.indexing
+      ? 'indexing…'
+      : doc.indexed
+      ? `${doc.chunks.length} chunk${doc.chunks.length === 1 ? '' : 's'}`
+      : 'not indexed yet';
+    chip.innerHTML =
+      `<span class="doc-chip-name">${escapeHtml(doc.name)}</span>` +
+      `<span class="doc-chip-meta">${status}</span>` +
+      `<button class="doc-chip-remove" type="button" aria-label="Remove document">×</button>`;
+    chip.querySelector('.doc-chip-remove').addEventListener('click', () => removeDocument(doc.id));
+    docListEl.appendChild(chip);
+  });
+  docCountBadge.textContent = `${state.documents.length} active`;
+}
+
+function addDocument(name, text) {
+  const doc = {
+    id: ++docIdCounter,
+    name,
+    text,
+    chunks: [],
+    embeddings: null,
+    indexed: false,
+    indexing: false,
+    indexingPromise: null
+  };
+  state.documents.push(doc);
+  renderDocList();
+  return doc;
+}
+
+function removeDocument(id) {
+  state.documents = state.documents.filter((d) => d.id !== id);
+  renderDocList();
+}
+
+function invalidateAllIndexes() {
+  state.documents.forEach((d) => {
+    d.indexed = false;
+    d.embeddings = null;
+    d.chunks = [];
+    d.indexing = false;
+    d.indexingPromise = null;
+  });
+  renderDocList();
+}
+
+// ---- Indexing a single document (chunk + embed) ----
 const indexStatusEl = document.getElementById('indexStatus');
 function setIndexStatus(text, kind) {
   indexStatusEl.textContent = text;
   indexStatusEl.className = 'index-status' + (text ? ' visible' : '') + (kind ? ' ' + kind : '');
 }
 
-function invalidateIndex() {
-  state.indexed = false;
-  state.embeddings = null;
-  state.chunks = [];
-  state.indexing = false;
-  state.indexingPromise = null;
-  setIndexStatus('', 'idle');
-}
+function indexDocument(doc) {
+  if (doc.indexingPromise) return doc.indexingPromise;
 
-function indexDocument() {
-  if (state.indexingPromise) return state.indexingPromise;
+  const chunks = chunkText(doc.text, state.settings.chunkWords, state.settings.overlapWords);
+  doc.chunks = chunks;
+  doc.indexing = true;
+  renderDocList();
 
-  const chunks = chunkText(state.activeDocument);
-  state.chunks = chunks;
-  state.indexing = true;
-
-  state.indexingPromise = (async () => {
+  doc.indexingPromise = (async () => {
     try {
-      const embeddings = await embedTexts(chunks, 'RETRIEVAL_DOCUMENT', (batch, totalBatches) => {
-        const label = totalBatches > 1 ? ` (batch ${batch}/${totalBatches})` : '';
-        setIndexStatus(`Indexing document — embedding ${chunks.length} chunk${chunks.length === 1 ? '' : 's'}${label}…`, 'loading');
+      const embeddings = await embedTexts(chunks, 'RETRIEVAL_DOCUMENT', (batch, total) => {
+        const label = total > 1 ? ` (batch ${batch}/${total})` : '';
+        setIndexStatus(`Indexing "${doc.name}"${label}…`, 'loading');
       });
-      state.embeddings = embeddings;
-      state.indexed = true;
-      setIndexStatus(`✓ Indexed — ${chunks.length} chunk${chunks.length === 1 ? '' : 's'} ready`, 'done');
+      doc.embeddings = embeddings;
+      doc.indexed = true;
       return true;
     } catch (err) {
-      setIndexStatus(`Indexing failed: ${err.message}`, 'error');
-      state.indexingPromise = null;
+      doc.indexingPromise = null;
       throw err;
     } finally {
-      state.indexing = false;
+      doc.indexing = false;
+      renderDocList();
     }
   })();
 
-  return state.indexingPromise;
+  return doc.indexingPromise;
 }
 
-// ---- Document mode toggle (sample vs custom) ----
+// Auto-load the sample document so the demo works instantly.
+addDocument(SAMPLE_NAME, SAMPLE_DOC);
+
+// ---- RAG settings sliders ----
+const chunkSizeSlider = document.getElementById('chunkSizeSlider');
+const chunkSizeValue = document.getElementById('chunkSizeValue');
+const topKSlider = document.getElementById('topKSlider');
+const topKValue = document.getElementById('topKValue');
+const temperatureSlider = document.getElementById('temperatureSlider');
+const temperatureValue = document.getElementById('temperatureValue');
+const settingsToggle = document.getElementById('settingsToggle');
+const settingsBody = document.getElementById('settingsBody');
+
+chunkSizeSlider.addEventListener('input', () => {
+  chunkSizeValue.textContent = chunkSizeSlider.value;
+});
+chunkSizeSlider.addEventListener('change', () => {
+  state.settings.chunkWords = parseInt(chunkSizeSlider.value, 10);
+  state.settings.overlapWords = Math.max(10, Math.round(state.settings.chunkWords * 0.2));
+  invalidateAllIndexes();
+  setIndexStatus('Chunk size changed — documents will re-index on your next question.', 'idle');
+});
+
+topKSlider.addEventListener('input', () => {
+  topKValue.textContent = topKSlider.value;
+  state.settings.topK = parseInt(topKSlider.value, 10);
+});
+
+temperatureSlider.addEventListener('input', () => {
+  temperatureValue.textContent = parseFloat(temperatureSlider.value).toFixed(2);
+  state.settings.temperature = parseFloat(temperatureSlider.value);
+});
+
+settingsToggle.addEventListener('click', () => {
+  const hidden = settingsBody.classList.toggle('hidden');
+  settingsToggle.textContent = hidden ? 'Show' : 'Hide';
+});
+
+// ---- Document add UI (sample / paste / upload) ----
 const toggleBtns = document.querySelectorAll('.toggle-btn');
 const sampleView = document.getElementById('sampleView');
 const customView = document.getElementById('customView');
+const addSampleBtn = document.getElementById('addSampleBtn');
+const sampleHint = document.getElementById('sampleHint');
+const customText = document.getElementById('customText');
+const useCustomBtn = document.getElementById('useCustomBtn');
+const customHint = document.getElementById('customHint');
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
 
 toggleBtns.forEach((btn) => {
   btn.addEventListener('click', () => {
     toggleBtns.forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
-    const mode = btn.dataset.mode;
-    if (mode === 'sample') {
+    if (btn.dataset.mode === 'sample') {
       sampleView.classList.remove('hidden');
       customView.classList.add('hidden');
-      state.activeDocument = SAMPLE_DOC;
-      invalidateIndex();
-      resetChat();
     } else {
       sampleView.classList.add('hidden');
       customView.classList.remove('hidden');
@@ -154,11 +244,16 @@ toggleBtns.forEach((btn) => {
   });
 });
 
-const customText = document.getElementById('customText');
-const useCustomBtn = document.getElementById('useCustomBtn');
-const customHint = document.getElementById('customHint');
-const fileInput = document.getElementById('fileInput');
-const uploadBtn = document.getElementById('uploadBtn');
+addSampleBtn.addEventListener('click', () => {
+  if (state.documents.some((d) => d.name === SAMPLE_NAME)) {
+    sampleHint.textContent = 'Already added — check the documents list above.';
+    return;
+  }
+  addDocument(SAMPLE_NAME, SAMPLE_DOC);
+  sampleHint.textContent = 'Added — ask a question in the chat panel.';
+});
+
+let uploadedFileName = null;
 
 uploadBtn.addEventListener('click', () => fileInput.click());
 
@@ -183,7 +278,8 @@ fileInput.addEventListener('change', async () => {
     const reader = new FileReader();
     reader.onload = () => {
       customText.value = reader.result;
-      customHint.textContent = `Loaded "${file.name}" — click "Use this document" to activate it.`;
+      uploadedFileName = file.name;
+      customHint.textContent = `Loaded "${file.name}" — click "+ Add document" to add it.`;
     };
     reader.readAsText(file);
     return;
@@ -198,7 +294,8 @@ fileInput.addEventListener('change', async () => {
         return;
       }
       customText.value = text;
-      customHint.textContent = `Extracted text from "${file.name}" — click "Use this document" to activate it.`;
+      uploadedFileName = file.name;
+      customHint.textContent = `Extracted text from "${file.name}" — click "+ Add document" to add it.`;
     } catch (err) {
       customHint.textContent = 'Could not read that PDF. Try a different file.';
     }
@@ -208,17 +305,38 @@ fileInput.addEventListener('change', async () => {
   customHint.textContent = 'Please upload a .txt or .pdf file.';
 });
 
+let pastedDocCounter = 0;
+
 useCustomBtn.addEventListener('click', () => {
   const text = customText.value.trim();
   if (!text) {
     customHint.textContent = 'Paste some text or upload a file first.';
     return;
   }
-  state.activeDocument = text;
-  customHint.textContent = 'Document activated — ask a question in the chat panel.';
-  invalidateIndex();
-  resetChat();
+  const name = uploadedFileName || `Pasted document ${++pastedDocCounter}`;
+  addDocument(name, text);
+  customHint.textContent = `Added "${name}" — ask a question in the chat panel.`;
+  customText.value = '';
+  uploadedFileName = null;
 });
+
+// ---- Agent pipeline UI ----
+function updateStage(stage, status, detail) {
+  const capitalized = stage.charAt(0).toUpperCase() + stage.slice(1);
+  const stageEl = document.getElementById('stage' + capitalized);
+  const detailEl = document.getElementById('stage' + capitalized + 'Detail');
+  if (stageEl) {
+    stageEl.classList.remove('idle', 'running', 'done', 'error');
+    stageEl.classList.add(status);
+  }
+  if (detailEl && detail !== undefined) detailEl.textContent = detail;
+}
+
+function resetPipeline() {
+  updateStage('doc', 'idle', 'Idle — searches only your documents');
+  updateStage('web', 'idle', 'Idle — live Google Search grounding');
+  updateStage('arbitrator', 'idle', "Idle — synthesizes both agents' answers");
+}
 
 // ---- Chat logic ----
 const chatWindow = document.getElementById('chatWindow');
@@ -230,15 +348,10 @@ const resetBtn = document.getElementById('resetBtn');
 let chatHistory = []; // [{role: 'user'|'model', text: string}]
 
 function renderEmptyState() {
-  chatWindow.innerHTML = '<p class="empty-state">Ask a question below — try "What happens in Away mode?" or "Is water damage covered by warranty?"</p>';
+  chatWindow.innerHTML =
+    '<p class="empty-state">Ask anything — try "What happens in Away mode?" (your document), "What\'s today\'s date?" (the web), or something that needs both.</p>';
 }
 renderEmptyState();
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
 
 function addBubble(role, text) {
   const emptyState = chatWindow.querySelector('.empty-state');
@@ -264,34 +377,65 @@ function addStreamingBubble() {
   return { bubble, cursor };
 }
 
-function addTyping() {
-  const typing = document.createElement('div');
-  typing.className = 'typing';
-  typing.innerHTML = '<span></span><span></span><span></span>';
-  chatWindow.appendChild(typing);
-  chatWindow.scrollTop = chatWindow.scrollHeight;
-  return typing;
-}
+function addSources(afterEl, docChunks, webSources, searchWidget) {
+  const hasDocSources = docChunks && docChunks.length > 0;
+  const hasWebSources = webSources && webSources.length > 0;
+  if (!hasDocSources && !hasWebSources && !searchWidget) return;
 
-function addSources(afterEl, scoredChunks) {
   const wrap = document.createElement('div');
   wrap.className = 'sources';
 
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'sources-toggle';
-  toggle.textContent = `Sources (${scoredChunks.length})`;
+  const total = (hasDocSources ? docChunks.length : 0) + (hasWebSources ? webSources.length : 0);
+  toggle.textContent = `Sources (${total})`;
 
   const list = document.createElement('div');
   list.className = 'sources-list hidden';
-  scoredChunks.forEach((c) => {
-    const chip = document.createElement('div');
-    chip.className = 'source-chip';
-    const pct = Math.max(0, Math.round(c.score * 100));
-    const preview = c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text;
-    chip.innerHTML = `<span class="source-score">${pct}% match</span><p>${escapeHtml(preview)}</p>`;
-    list.appendChild(chip);
-  });
+
+  if (hasDocSources) {
+    const heading = document.createElement('div');
+    heading.className = 'sources-group-label';
+    heading.textContent = 'From your documents';
+    list.appendChild(heading);
+    docChunks.forEach((c) => {
+      const chip = document.createElement('div');
+      chip.className = 'source-chip';
+      const pct = Math.max(0, Math.round(c.score * 100));
+      const preview = c.text.length > 220 ? c.text.slice(0, 220) + '…' : c.text;
+      chip.innerHTML =
+        `<span class="source-score">${pct}% match</span> <span class="source-doc-name">${escapeHtml(c.docName)}</span>` +
+        `<p>${escapeHtml(preview)}</p>`;
+      list.appendChild(chip);
+    });
+  }
+
+  if (hasWebSources) {
+    const heading = document.createElement('div');
+    heading.className = 'sources-group-label';
+    heading.textContent = 'From the web';
+    list.appendChild(heading);
+    webSources.forEach((s) => {
+      const chip = document.createElement('a');
+      chip.className = 'source-chip source-chip-link';
+      chip.href = s.url;
+      chip.target = '_blank';
+      chip.rel = 'noopener';
+      chip.innerHTML =
+        `<span class="source-web-title">${escapeHtml(s.title)}</span>` +
+        `<span class="source-web-url">${escapeHtml(s.url)}</span>`;
+      list.appendChild(chip);
+    });
+  }
+
+  if (searchWidget) {
+    const widgetWrap = document.createElement('div');
+    widgetWrap.className = 'search-widget';
+    // Rendered directly from Gemini's groundingMetadata — required attribution for Google Search grounding.
+    widgetWrap.innerHTML = searchWidget;
+    list.appendChild(widgetWrap);
+  }
 
   toggle.addEventListener('click', () => list.classList.toggle('hidden'));
   wrap.appendChild(toggle);
@@ -303,6 +447,7 @@ function addSources(afterEl, scoredChunks) {
 function resetChat() {
   chatHistory = [];
   renderEmptyState();
+  resetPipeline();
 }
 
 resetBtn.addEventListener('click', resetChat);
@@ -318,45 +463,55 @@ chatForm.addEventListener('submit', async (e) => {
   chatInput.disabled = true;
   sendBtn.disabled = true;
 
-  let typing = addTyping();
+  updateStage('doc', 'running', 'Searching your documents…');
+  updateStage('web', 'running', 'Searching the live web…');
+  updateStage('arbitrator', 'idle', 'Waiting on both agents…');
 
-  // Step 1: make sure the document is indexed (chunked + embedded) before we can retrieve anything.
-  if (!state.indexed) {
-    try {
-      await indexDocument();
-    } catch (err) {
-      typing.remove();
-      addBubble('error', 'Could not index the document for search. ' + err.message);
-      chatInput.disabled = false;
-      sendBtn.disabled = false;
-      chatInput.focus();
-      return;
-    }
-  }
+  let topK = [];
+  let lastWebSources = [];
+  let lastSearchWidget = '';
 
   try {
-    // Step 2: embed the question and retrieve the most relevant chunks — this is the "R" in RAG.
-    const [questionEmbedding] = await embedTexts([question], 'RETRIEVAL_QUERY');
-    const scored = state.chunks
-      .map((text, i) => ({ text, score: cosineSim(questionEmbedding, state.embeddings[i]) }))
-      .sort((a, b) => b.score - a.score);
-    const topK = scored.slice(0, Math.min(TOP_K, scored.length));
+    // Best-effort indexing of any not-yet-indexed documents. If this fails,
+    // we still continue — the Web Agent can answer independently.
+    const needsIndex = state.documents.filter((d) => !d.indexed);
+    if (needsIndex.length > 0) {
+      setIndexStatus(`Indexing ${needsIndex.length} document${needsIndex.length === 1 ? '' : 's'}…`, 'loading');
+      const results = await Promise.allSettled(needsIndex.map((d) => indexDocument(d)));
+      const failures = results.filter((r) => r.status === 'rejected').length;
+      const indexedCount = state.documents.filter((d) => d.indexed).length;
+      const totalChunks = state.documents.reduce((sum, d) => sum + (d.indexed ? d.chunks.length : 0), 0);
+      if (failures > 0) {
+        setIndexStatus(`Indexed ${indexedCount}/${state.documents.length} documents (${failures} failed) — continuing anyway`, 'error');
+      } else if (state.documents.length > 0) {
+        setIndexStatus(`✓ Indexed — ${state.documents.length} document${state.documents.length === 1 ? '' : 's'}, ${totalChunks} chunks ready`, 'done');
+      }
+    }
 
-    typing.remove();
-    typing = null;
+    const indexedDocs = state.documents.filter((d) => d.indexed && d.chunks.length > 0);
+    if (indexedDocs.length > 0) {
+      const [questionEmbedding] = await embedTexts([question], 'RETRIEVAL_QUERY');
+      const pooled = [];
+      indexedDocs.forEach((d) => {
+        d.chunks.forEach((text, i) => {
+          pooled.push({ text, docName: d.name, score: cosineSim(questionEmbedding, d.embeddings[i]) });
+        });
+      });
+      pooled.sort((a, b) => b.score - a.score);
+      topK = pooled.slice(0, Math.min(state.settings.topK, pooled.length));
+    }
 
-    // Step 3: stream the answer, grounded only in the retrieved chunks.
     const { bubble, cursor } = addStreamingBubble();
     let fullText = '';
-    let streamError = null;
 
     const response = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chunks: topK.map((c) => c.text),
+        chunks: topK.map((c) => ({ text: c.text, docName: c.docName })),
         question,
-        history: chatHistory
+        history: chatHistory,
+        temperature: state.settings.temperature
       })
     });
 
@@ -366,9 +521,12 @@ chatForm.addEventListener('submit', async (e) => {
         const data = await response.json();
         errMsg = data.error || errMsg;
       } catch {
-        // ignore parse failure, use default message
+        // ignore parse failure
       }
       bubble.remove();
+      updateStage('doc', 'error', 'Request failed');
+      updateStage('web', 'error', 'Request failed');
+      updateStage('arbitrator', 'error', 'Request failed');
       addBubble('error', errMsg);
       return;
     }
@@ -389,20 +547,43 @@ chatForm.addEventListener('submit', async (e) => {
         if (!trimmed.startsWith('data:')) continue;
         const jsonStr = trimmed.slice(5).trim();
         if (!jsonStr || jsonStr === '[DONE]') continue;
+
+        let parsed;
         try {
-          const parsed = JSON.parse(jsonStr);
-          if (parsed.error) {
-            streamError = parsed.error;
-            continue;
-          }
-          if (parsed.text) {
-            fullText += parsed.text;
-            bubble.textContent = fullText;
-            bubble.appendChild(cursor);
-            chatWindow.scrollTop = chatWindow.scrollHeight;
-          }
+          parsed = JSON.parse(jsonStr);
         } catch {
-          // skip malformed SSE line
+          continue;
+        }
+
+        if (parsed.stage === 'doc') {
+          if (parsed.status === 'done') {
+            updateStage(
+              'doc',
+              'done',
+              parsed.hasDocuments ? (parsed.preview ? 'Found relevant content' : 'Nothing relevant found') : 'No documents to search'
+            );
+          } else if (parsed.status === 'error') {
+            updateStage('doc', 'error', 'Failed: ' + parsed.error);
+          }
+        } else if (parsed.stage === 'web') {
+          if (parsed.status === 'done') {
+            const n = (parsed.sources || []).length;
+            updateStage('web', 'done', n > 0 ? `Found ${n} web source${n === 1 ? '' : 's'}` : 'No strong web results');
+          } else if (parsed.status === 'error') {
+            updateStage('web', 'error', 'Failed: ' + parsed.error);
+          }
+        } else if (parsed.stage === 'arbitrator' && parsed.status === 'running') {
+          updateStage('arbitrator', 'running', 'Synthesizing final answer…');
+        } else if (parsed.stage === 'sources') {
+          lastWebSources = parsed.webSources || [];
+          lastSearchWidget = parsed.searchWidget || '';
+        } else if (parsed.error) {
+          updateStage('arbitrator', 'error', parsed.error);
+        } else if (parsed.text) {
+          fullText += parsed.text;
+          bubble.textContent = fullText;
+          bubble.appendChild(cursor);
+          chatWindow.scrollTop = chatWindow.scrollHeight;
         }
       }
     }
@@ -410,22 +591,26 @@ chatForm.addEventListener('submit', async (e) => {
     cursor.remove();
     bubble.classList.remove('streaming');
 
-    if (streamError && !fullText) {
+    if (!fullText) {
+      updateStage('arbitrator', 'error', 'No answer generated');
       bubble.remove();
-      addBubble('error', streamError);
+      addBubble('error', 'No answer was generated. Please try again.');
       return;
     }
 
+    updateStage('arbitrator', 'done', 'Final answer ready');
+
     if (window.marked && window.DOMPurify) {
-      bubble.innerHTML = DOMPurify.sanitize(marked.parse(fullText || '(no response)'));
+      bubble.innerHTML = DOMPurify.sanitize(marked.parse(fullText));
     } else {
-      bubble.textContent = fullText || '(no response)';
+      bubble.textContent = fullText;
     }
 
-    addSources(bubble, topK);
+    addSources(bubble, topK, lastWebSources, lastSearchWidget);
     chatHistory.push({ role: 'model', text: fullText });
   } catch (err) {
-    if (typing) typing.remove();
+    updateStage('doc', 'error', 'Something went wrong');
+    updateStage('web', 'error', 'Something went wrong');
     addBubble('error', 'Could not reach the server. Please try again.');
   } finally {
     chatInput.disabled = false;

@@ -1,23 +1,29 @@
-# AI Document Q&A Chatbot — Demo (v2: real RAG)
+# AI Research Assistant — Multi-Agent RAG + Live Web (v3)
 
-A live chatbot that answers questions grounded only in a provided document — try the pre-loaded sample, paste your own text, or upload a `.txt`/`.pdf` file. Unlike a "stuff the whole document into the prompt" demo, this version does actual retrieval-augmented generation: the document is chunked, each chunk is embedded, and only the chunks most relevant to your question are sent to the model — which then streams its answer back token by token.
+A hybrid AI assistant that answers every question two ways at once, then synthesizes the result:
 
-## What's new in v2
+- **Doc Agent** — searches only documents you've added, using a real RAG pipeline (chunking → embeddings → retrieval).
+- **Web Agent** — searches the live web using Gemini's built-in Google Search grounding, running at the same time as the Doc Agent.
+- **Arbitrator** — once both finish, combines their findings into one final answer, clearly labeling what came from your documents vs. the web, and flags it if the two disagree.
 
-- **Real RAG pipeline** — the document is split into overlapping chunks, each chunk is embedded with `gemini-embedding-001`, and cosine similarity picks the top 4 most relevant chunks per question (instead of truncating the doc to 12,000 characters and hoping the answer's in there).
-- **Streaming answers** — `api/ask.js` runs as a Vercel **Edge Function** and streams Gemini's response as Server-Sent Events, so the answer appears token by token instead of after one long wait.
-- **PDF support** — `.pdf` uploads are parsed client-side with `pdf.js`, no server-side file handling needed.
-- **Source citations** — every answer shows a "Sources" toggle listing the exact excerpts (with match %) the model was given, so you can see *why* it answered the way it did.
-- **Markdown rendering** — answers render with `marked` + `DOMPurify` (lists, code blocks, bold, links).
+The pipeline itself is visible in the UI as three status cards that light up in real time (idle → running → done), not just the final answer.
+
+## What's new in v3
+
+- **Multi-agent architecture** — three coordinated Gemini calls per question (two in parallel, one synthesizing), all orchestrated server-side in a single Edge Function.
+- **Live web search** — via `google_search` grounding, with real source links and Google's required search-suggestions attribution widget rendered under each answer.
+- **Multi-document support** — add as many documents as you like (sample doc, pasted text, `.txt`/`.pdf` uploads); retrieval pools chunks across all of them and tags each source with which document it came from.
+- **Tunable RAG settings** — sliders for chunk size, how many chunks get retrieved (top-K), and generation temperature, all live-adjustable from the UI.
+- **Visible agent pipeline** — a dedicated panel shows each agent's status and a one-line summary of what it found, as it happens.
 
 ## File structure
 
 ```
 chatbot-demo/
-├── index.html         → page structure
-├── css/style.css       → styling (matches the portfolio's design system)
-├── js/main.js          → chunking, embeddings, retrieval, streaming, PDF parsing, chat UI
-├── api/ask.js          → Edge Function — streams the grounded answer from Gemini
+├── index.html         → page structure (settings panel, pipeline panel, doc manager, chat)
+├── css/style.css       → styling
+├── js/main.js          → multi-doc RAG, settings, pipeline UI, streaming, PDF parsing
+├── api/ask.js          → Edge Function — orchestrates Doc Agent + Web Agent + Arbitrator
 ├── api/embed.js        → Serverless Function — embeds document chunks & questions
 ├── package.json
 ├── favicon.svg
@@ -26,35 +32,33 @@ chatbot-demo/
 
 ## How it works
 
-1. **Chunking** (`js/main.js`): the active document is split into ~140-word overlapping windows.
-2. **Indexing**: the first time you ask a question, every chunk is sent to `api/embed.js`, which calls Gemini's `gemini-embedding-001` model and returns a vector per chunk. This only happens once per document (cached in memory for the session).
-3. **Retrieval**: your question is embedded the same way, then compared to every chunk vector with cosine similarity. The top 4 matches are selected.
-4. **Generation**: only those top 4 excerpts (not the whole document) are sent to `api/ask.js`, which streams Gemini's answer back over SSE.
-5. **Citations**: the same top-4 excerpts are shown under the answer so you can verify the grounding yourself.
+1. **Chunking & indexing**: each document you add is split into overlapping word-window chunks and embedded with `gemini-embedding-001`. This happens once per document (cached client-side for the session) and re-runs automatically if you change the chunk size setting.
+2. **Retrieval**: your question is embedded the same way and compared via cosine similarity against every chunk from every active document. The top-K matches (pooled across documents) are selected.
+3. **Doc Agent**: receives only those top-K excerpts and answers strictly from them — or says plainly if nothing relevant was found.
+4. **Web Agent**: runs at the same time, using Google Search grounding to answer from current web results, with citations.
+5. **Arbitrator**: once both finish, synthesizes them into one final answer, streamed back token by token, noting the source of each part and flagging any conflict between the document and web findings.
+6. **Sources**: the final answer shows a "Sources" toggle with two groups — the document excerpts used, and the web results the Web Agent found (plus Google's required attribution widget).
 
 ## 1. Get a free Gemini API key
 
 1. Go to [aistudio.google.com](https://aistudio.google.com)
 2. Sign in with a Google account
 3. Click **Get API key → Create API key**
-4. Copy the key — you won't need a credit card for the free tier
 
-The free tier has rate limits, but it's more than enough for a portfolio demo a few visitors click through. Note that v2 makes slightly more API calls than v1 (one embedding call per chunk batch, plus one per question, in addition to the answer generation call) — still well within free-tier limits for demo-scale traffic.
+The free tier has rate limits, but it's fine for a portfolio demo a handful of visitors click through. Note that v3 makes noticeably more API calls per question than earlier versions (embedding calls, plus three Gemini generation calls: Doc Agent, Web Agent, Arbitrator) — worth keeping in mind if you expect heavier traffic.
 
 ## 2. Deploy to Vercel
 
-1. Push this folder to a GitHub repo (e.g. `chatbot-demo`)
+1. Push this folder to your GitHub repo
 2. In Vercel: **Add New → Project → Import** that repo
-3. **Before clicking Deploy**, add your API key as an environment variable:
-   - In the import screen, expand **Environment Variables**
+3. Add your API key as an environment variable (**Project → Settings → Environment Variables**):
    - Name: `GEMINI_API_KEY`
-   - Value: (paste the key from Step 1)
-   - Or if you've already deployed: go to **Project → Settings → Environment Variables**, add it there, then redeploy (Deployments tab → ⋯ → Redeploy)
-4. Click **Deploy**
+   - Value: your key from step 1
+4. Deploy (or redeploy if already connected — **Deployments → ⋯ → Redeploy**)
 
-Vercel auto-detects `api/ask.js` as an Edge Function (it exports `config = { runtime: 'edge' }`) and `api/embed.js` as a regular Node serverless function — no extra config needed.
+Vercel auto-detects `api/ask.js` as an Edge Function (`config = { runtime: 'edge' }`) and `api/embed.js` as a regular Node serverless function — no extra config needed.
 
-**Important:** never put your API key directly in the code or commit it to GitHub. It should only ever exist as a Vercel environment variable.
+**Important:** never commit your API key to GitHub. It should only exist as a Vercel environment variable.
 
 ## 3. Testing locally (optional)
 
@@ -62,13 +66,15 @@ Vercel auto-detects `api/ask.js` as an Edge Function (it exports `config = { run
 npm install -g vercel
 vercel dev
 ```
-Create a `.env.local` file (not committed to Git) with:
+Create a `.env.local` file (not committed to Git):
 ```
 GEMINI_API_KEY=your_key_here
 ```
 
 ## Notes / what to extend later
 
-- Chunk size/overlap, `TOP_K`, and the embedding output dimensionality are all tunable constants near the top of `js/main.js` and `api/embed.js`.
+- Chunk size, overlap ratio, top-K, and temperature are all tunable from the UI; their underlying defaults live near the top of `js/main.js`.
+- The Web Agent and Doc Agent run in parallel via `Promise.all` in `api/ask.js` — the Arbitrator only starts once both resolve.
+- Google's grounding terms require displaying the search-suggestions widget when showing grounded results publicly; this is already wired up via `groundingMetadata.searchEntryPoint.renderedContent`.
 - PDF text extraction won't work on scanned/image-only PDFs (no text layer) — OCR would be a further extension.
-- Embeddings are recomputed per browser session (not persisted), which is fine for a demo but would need a vector store (e.g. Pinecone, pgvector) for a production app with many documents.
+- Documents and their embeddings live in memory for the browser session only — a production version with persistent multi-session documents would need a real backend + vector store.

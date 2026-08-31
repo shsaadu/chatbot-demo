@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Document Q&A Chatbot — Demo by Mohammad Saad</title>
-<meta name="description" content="Ask questions about a document and get answers grounded only in its content — a live AI chatbot demo built with the Gemini API.">
+<title>AI Research Assistant — Multi-Agent RAG + Web Demo by Mohammad Saad</title>
+<meta name="description" content="A hybrid AI assistant that answers from your documents and live web search at once, using a doc agent, a web agent, and an arbitrator that synthesizes both — built with the Gemini API.">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,41 +18,103 @@
 
 <header class="top">
   <a href="../" class="back-link">← Back to portfolio</a>
-  <div class="brand">saad.dev <span class="brand-dot"></span> doc-chat</div>
+  <div class="brand">saad.dev <span class="brand-dot"></span> agent-rag</div>
 </header>
 
 <main class="wrap">
   <div class="intro">
     <div class="eyebrow">Live demo</div>
-    <h1>AI Document Q&amp;A Chatbot</h1>
-    <p class="intro-sub">Ask questions and get answers grounded only in the document below — no guessing, no made-up answers. Under the hood this is real retrieval-augmented generation: your document is chunked and embedded, and only the most relevant chunks are sent to the model for each question.</p>
+    <h1>AI Research Assistant</h1>
+    <p class="intro-sub">Every question runs through two agents at once — a <strong>Doc Agent</strong> that searches only your uploaded documents, and a <strong>Web Agent</strong> that searches the live web via Google Search grounding. An <strong>Arbitrator</strong> agent then synthesizes both into one answer, labeling what came from where. Watch the pipeline run in real time below.</p>
   </div>
+
+  <section class="pipeline-panel">
+    <div class="panel-head">
+      <span class="panel-title">Agent pipeline</span>
+      <span class="pipeline-hint">runs on every question</span>
+    </div>
+    <div class="pipeline-track">
+      <div class="pipeline-stage" id="stageDoc" data-stage="doc">
+        <div class="stage-dot"></div>
+        <div class="stage-body">
+          <div class="stage-name">Doc Agent</div>
+          <div class="stage-detail" id="stageDocDetail">Idle — searches only your documents</div>
+        </div>
+      </div>
+      <div class="pipeline-stage" id="stageWeb" data-stage="web">
+        <div class="stage-dot"></div>
+        <div class="stage-body">
+          <div class="stage-name">Web Agent</div>
+          <div class="stage-detail" id="stageWebDetail">Idle — live Google Search grounding</div>
+        </div>
+      </div>
+      <div class="pipeline-stage" id="stageArbitrator" data-stage="arbitrator">
+        <div class="stage-dot"></div>
+        <div class="stage-body">
+          <div class="stage-name">Arbitrator</div>
+          <div class="stage-detail" id="stageArbitratorDetail">Idle — synthesizes both agents' answers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="settings-panel">
+    <div class="panel-head">
+      <span class="panel-title">RAG settings</span>
+      <button class="btn btn-ghost btn-small" id="settingsToggle" type="button">Hide</button>
+    </div>
+    <div class="settings-body" id="settingsBody">
+      <div class="setting-row">
+        <label for="chunkSizeSlider">Chunk size <span class="setting-value" id="chunkSizeValue">140</span> words</label>
+        <input type="range" id="chunkSizeSlider" min="60" max="300" step="10" value="140">
+        <p class="setting-hint">Smaller chunks retrieve more precisely; larger chunks give the model more surrounding context. Changing this re-indexes every document.</p>
+      </div>
+      <div class="setting-row">
+        <label for="topKSlider">Chunks retrieved <span class="setting-value" id="topKValue">4</span></label>
+        <input type="range" id="topKSlider" min="1" max="8" step="1" value="4">
+        <p class="setting-hint">How many chunks — pooled across all your documents — get sent to the model per question.</p>
+      </div>
+      <div class="setting-row">
+        <label for="temperatureSlider">Temperature <span class="setting-value" id="temperatureValue">0.3</span></label>
+        <input type="range" id="temperatureSlider" min="0" max="1" step="0.05" value="0.3">
+        <p class="setting-hint">Lower keeps answers literal and grounded; higher lets phrasing get more varied.</p>
+      </div>
+    </div>
+  </section>
 
   <div class="panels">
     <section class="doc-panel">
       <div class="panel-head">
-        <span class="panel-title">Document</span>
-        <div class="doc-toggle">
-          <button class="toggle-btn active" data-mode="sample">Sample</button>
-          <button class="toggle-btn" data-mode="custom">Your own</button>
-        </div>
+        <span class="panel-title">Documents</span>
+        <span class="doc-count-badge" id="docCountBadge">1 active</span>
       </div>
       <div class="index-status" id="indexStatus"></div>
 
-      <div class="doc-body" id="sampleView">
-        <h3 id="docTitle">Aurora Smart Thermostat — User Manual</h3>
-        <div class="doc-text" id="docText"></div>
-      </div>
+      <div class="doc-list" id="docList"></div>
 
-      <div class="doc-body hidden" id="customView">
-        <label class="field-label" for="customText">Paste text, or upload a .txt or .pdf file</label>
-        <textarea id="customText" placeholder="Paste any document text here — a policy, FAQ, manual, or notes..."></textarea>
-        <div class="upload-row">
-          <input type="file" id="fileInput" accept=".txt,.pdf" hidden>
-          <button class="btn btn-ghost" id="uploadBtn">Upload .txt or .pdf</button>
-          <button class="btn btn-primary" id="useCustomBtn">Use this document</button>
+      <div class="doc-add">
+        <div class="doc-toggle">
+          <button class="toggle-btn active" data-mode="sample">Sample doc</button>
+          <button class="toggle-btn" data-mode="custom">Add document</button>
         </div>
-        <p class="hint" id="customHint"></p>
+
+        <div class="doc-body" id="sampleView">
+          <h3 id="docTitle">Aurora Smart Thermostat — User Manual</h3>
+          <div class="doc-text" id="docText"></div>
+          <button class="btn btn-ghost btn-small" id="addSampleBtn" type="button">+ Add sample doc</button>
+          <p class="hint" id="sampleHint"></p>
+        </div>
+
+        <div class="doc-body hidden" id="customView">
+          <label class="field-label" for="customText">Paste text, or upload a .txt or .pdf file</label>
+          <textarea id="customText" placeholder="Paste any document text here — a policy, FAQ, manual, or notes..."></textarea>
+          <div class="upload-row">
+            <input type="file" id="fileInput" accept=".txt,.pdf" hidden>
+            <button class="btn btn-ghost" id="uploadBtn" type="button">Upload .txt or .pdf</button>
+            <button class="btn btn-primary" id="useCustomBtn" type="button">+ Add document</button>
+          </div>
+          <p class="hint" id="customHint"></p>
+        </div>
       </div>
     </section>
 
@@ -63,13 +125,13 @@
       </div>
       <div class="chat-window" id="chatWindow"></div>
       <form class="chat-input-row" id="chatForm">
-        <input type="text" id="chatInput" placeholder="Ask something about the document..." autocomplete="off">
+        <input type="text" id="chatInput" placeholder="Ask anything — from your documents, the web, or both..." autocomplete="off">
         <button type="submit" class="btn btn-primary">Send</button>
       </form>
     </section>
   </div>
 
-  <p class="footnote">Built by <a href="https://github.com/shsaadu" target="_blank" rel="noopener">Mohammad Saad</a> — full-stack developer &amp; AI/ML engineer. RAG pipeline (chunking, embeddings, retrieval) + streaming responses, powered by the Gemini API.</p>
+  <p class="footnote">Built by <a href="https://github.com/shsaadu" target="_blank" rel="noopener">Mohammad Saad</a> — full-stack developer &amp; AI/ML engineer. Multi-agent hybrid RAG: a doc agent (chunking, embeddings, retrieval), a web agent (live Google Search grounding), and an arbitrator that synthesizes both — streamed in real time via the Gemini API.</p>
 </main>
 
 <script src="js/main.js" defer></script>
